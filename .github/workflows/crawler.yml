@@ -2,10 +2,8 @@ name: Hot News Crawler
 
 on:
   schedule:
-    # 核心修改点：这里设置为 "*/30 * * * *"
-    # 含义：无论白天黑夜，每 30 分钟运行一次。
-    # 这样能保证 GitHub Pages 上的趋势图是连续的，不会出现夜间断层。
-    - cron: "*/720 * * * *" 
+    # 保持每 30 分钟运行一次，确保后台数据连续
+    - cron: "*/30 * * * *" 
   workflow_dispatch:
 
 # 添加权限设置
@@ -32,24 +30,44 @@ jobs:
 
       - name: Verify required files
         run: |
-          echo "🔍 检查必需的配置文件..."
-
           if [ ! -f config/config.yaml ]; then
             echo "❌ 错误: config/config.yaml 文件不存在"
-            echo "请参考项目文档创建配置文件"
             exit 1
           fi
-
           if [ ! -f config/frequency_words.txt ]; then
             echo "❌ 错误: config/frequency_words.txt 文件不存在"
-            echo "请参考项目文档创建频率词配置文件"
             exit 1
           fi
 
-          echo "✅ 配置文件检查通过"
+      # 【核心修改】：判断时间，动态决定是否开启通知
+      - name: Check Time & Set Notification Mode
+        id: check_time
+        run: |
+          # 获取当前 UTC 时间 (GitHub 服务器时间)
+          current_hour=$(date -u +%H)
+          current_minute=$(date -u +%M)
+          
+          echo "当前 UTC 时间: $current_hour:$current_minute"
+          
+          # 时间换算表：
+          # UTC 00:xx = 北京时间 08:xx (早晨)
+          # UTC 10:xx = 北京时间 18:xx (晚上6点)
+          
+          # 逻辑判断：
+          # 1. 小时必须是 00 (北京8点) 或 10 (北京18点)
+          # 2. 分钟必须小于 30 (确保只在 08:00 这一班车推送，08:30 那一班车不推)
+          if [[ ("$current_hour" == "00" || "$current_hour" == "10") && "$current_minute" -lt 30 ]]; then
+            echo "🔔 命中推送时间点 (北京时间 08:00 或 18:00)"
+            echo "ENABLE_NOTIFICATION=true" >> $GITHUB_ENV
+          else
+            echo "🔕 非推送时间，执行静默爬取"
+            echo "ENABLE_NOTIFICATION=false" >> $GITHUB_ENV
+          fi
 
       - name: Run crawler
         env:
+          # 这里会自动读取上面一步设置的 ENABLE_NOTIFICATION 变量
+          # 当该变量为 false 时，程序只爬取数据不发送 Telegram
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
